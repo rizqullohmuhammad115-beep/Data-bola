@@ -20,11 +20,12 @@ jobs:
         env:
           FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
         run: |
-          DATE=$(date -u +%Y-%m-%d)
+          DATE_FROM=$(date -u +%Y-%m-%d)
+          DATE_TO=$(date -u -d "+7 days" +%Y-%m-%d)
 
           curl -fsSL \
             -H "X-Auth-Token: $FOOTBALL_DATA_TOKEN" \
-            "https://api.football-data.org/v4/matches?dateFrom=$DATE&dateTo=$DATE" \
+            "https://api.football-data.org/v4/matches?dateFrom=$DATE_FROM&dateTo=$DATE_TO" \
             -o matches-api.json
 
           node <<'NODE'
