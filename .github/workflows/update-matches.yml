@@ -2,7 +2,7 @@ name: Update Matches
 
 on:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: "0 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -16,51 +16,71 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get today's matches
-        env:
-          FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+      - name: Get today's date
+        id: date
         run: |
-          DATE_FROM=$(date -u +%Y-%m-%d)
-          DATE_TO=$(date -u -d "+7 days" +%Y-%m-%d)
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
-          curl -fsSL \
-            -H "X-Auth-Token: $FOOTBALL_DATA_TOKEN" \
-            "https://api.football-data.org/v4/matches?dateFrom=$DATE_FROM&dateTo=$DATE_TO" \
-            -o matches-api.json
+      - name: Get football matches
+        env:
+          MATCH_DATE: ${{ steps.date.outputs.date }}
+        run: |
+          set -e
 
-          node <<'NODE'
-          const fs = require('fs');
+          URL="https://www.sofascore.com/api/v1/sport/football/scheduled-events/$MATCH_DATE"
 
-          const data = JSON.parse(fs.readFileSync('matches-api.json', 'utf8'));
+          curl -L --fail --silent --show-error \
+            -A "Mozilla/5.0" \
+            "$URL" \
+            -o sofascore.json
 
-          const matches = (data.matches || []).map(m => ({
-            id: m.id,
-            league: m.competition?.name || null,
-            league_code: m.competition?.code || null,
-            home: m.homeTeam?.name || null,
-            away: m.awayTeam?.name || null,
-            date: m.utcDate || null,
-            status: m.status || null,
-            home_score: m.score?.fullTime?.home ?? null,
-            away_score: m.score?.fullTime?.away ?? null
-          }));
+          python3 <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
 
-          const result = {
-            date: new Date().toISOString().slice(0, 10),
-            updated_at: new Date().toISOString(),
-            total: matches.length,
-            matches
-          };
+          date = os.environ["MATCH_DATE"]
 
-          fs.writeFileSync(
-            'matches.json',
-            JSON.stringify(result, null, 2) + '\n'
-          );
+          with open("sofascore.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
 
-          console.log(`Saved ${matches.length} matches`);
-          NODE
+          matches = []
 
-      - name: Commit updated data
+          for event in data.get("events", []):
+              home = event.get("homeTeam", {})
+              away = event.get("awayTeam", {})
+              tournament = event.get("tournament", {})
+              category = tournament.get("category", {})
+
+              if not home.get("name") or not away.get("name"):
+                  continue
+
+              matches.append({
+                  "id": event.get("id"),
+                  "home": home.get("name"),
+                  "away": away.get("name"),
+                  "home_id": home.get("id"),
+                  "away_id": away.get("id"),
+                  "league": tournament.get("name"),
+                  "country": category.get("name"),
+                  "start_timestamp": event.get("startTimestamp"),
+                  "status": event.get("status", {}).get("type")
+              })
+
+          output = {
+              "date": date,
+              "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "total": len(matches),
+              "matches": matches
+          }
+
+          with open("matches.json", "w", encoding="utf-8") as f:
+              json.dump(output, f, ensure_ascii=False, indent=2)
+
+          print(f"Total matches: {len(matches)}")
+          PY
+
+      - name: Commit matches.json
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -68,7 +88,7 @@ jobs:
           git add matches.json
 
           if git diff --cached --quiet; then
-            echo "No changes"
+            echo "No changes."
           else
             git commit -m "Update matches"
             git push
